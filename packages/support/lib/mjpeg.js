@@ -1,7 +1,7 @@
 import _ from 'lodash';
 import log from './logger';
 import B from 'bluebird';
-import {getJimpImage, MIME_PNG} from './image-util';
+import {requireSharp} from './image-util';
 import {Writable} from 'stream';
 import {requirePackage} from './node';
 import axios from 'axios';
@@ -16,7 +16,7 @@ async function initMJpegConsumer() {
   if (!MJpegConsumer) {
     try {
       MJpegConsumer = await requirePackage('mjpeg-consumer');
-    } catch (ign) {}
+    } catch {}
   }
   if (!MJpegConsumer) {
     throw new Error(
@@ -77,9 +77,8 @@ class MJpegStream extends Writable {
     }
 
     try {
-      const jpg = await getJimpImage(lastChunk);
-      return await jpg.getBuffer(MIME_PNG);
-    } catch (e) {
+      return await requireSharp()(lastChunk).png().toBuffer();
+    } catch {
       return null;
     }
   }
@@ -173,13 +172,15 @@ class MJpegStream extends Writable {
    * the HTTP request itself. Then reset the state.
    */
   stop() {
-    if (!this.consumer) {
-      return;
+    if (this.consumer) {
+      this.consumer.unpipe(this);
     }
-
-    this.responseStream.unpipe(this.consumer);
-    this.consumer.unpipe(this);
-    this.responseStream.destroy();
+    if (this.responseStream) {
+      if (this.consumer) {
+        this.responseStream.unpipe(this.consumer);
+      }
+      this.responseStream.destroy();
+    }
     this.clear();
   }
 

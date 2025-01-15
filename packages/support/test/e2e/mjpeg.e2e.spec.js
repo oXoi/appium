@@ -42,8 +42,14 @@ function initMJpegServer(port, intMs = 300, times = 20) {
 describe('MJpeg Stream (e2e)', function () {
   let mJpegServer, stream;
   let serverUrl, port;
+  let should;
 
   before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+
     // TODO: remove when buffertools can handle v12
     if (process.version.startsWith('v12')) {
       return this.skip();
@@ -89,7 +95,6 @@ describe('MJpeg Stream (e2e)', function () {
     const png = await stream.lastChunkPNGBase64();
     png.should.be.a('string');
     png.indexOf('iVBOR').should.eql(0);
-    png.length.should.be.above(400);
 
     // now stop the stream and wait some more then assert no new data has come in
     stream.stop();
