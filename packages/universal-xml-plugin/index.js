@@ -1,5 +1,7 @@
-const {main} = require('./build/lib');
+const {main, UniversalXMLPlugin} = require('./build/lib');
 
 if (require.main === module) {
-  main();
+  (async () => await main())();
 }
+
+module.exports = {UniversalXMLPlugin};

@@ -14,7 +14,9 @@ import {
   catchAllHandler,
   allowCrossDomainAsyncExecute,
   handleIdempotency,
+  handleUpgrade,
   catch404Handler,
+  handleLogContext,
 } from './middleware';
 import {guineaPig, guineaPigScrollable, guineaPigAppBanner, welcome, STATIC_DIR} from './static';
 import {produceError, produceCrash} from './crash';
@@ -26,31 +28,71 @@ import {
 } from './websocket';
 import B from 'bluebird';
 import {DEFAULT_BASE_PATH} from '../constants';
-import {EventEmitter} from 'events';
+import {fs, timing} from '@appium/support';
 
 const KEEP_ALIVE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ *
+ * @param {import('express').Express} app
+ * @param {Partial<import('@appium/types').ServerArgs>} [cliArgs]
+ * @returns {Promise<http.Server>}
+ */
+async function createServer (app, cliArgs) {
+  const {sslCertificatePath, sslKeyPath} = cliArgs ?? {};
+  if (!sslCertificatePath && !sslKeyPath) {
+    return http.createServer(app);
+  }
+  if (!sslCertificatePath || !sslKeyPath) {
+    throw new Error(`Both certificate path and key path must be provided to enable TLS`);
+  }
+
+  const certKey = [sslCertificatePath, sslKeyPath];
+  const zipped = _.zip(
+    await B.all(certKey.map((p) => fs.exists(p))),
+    ['certificate', 'key'],
+    certKey,
+  );
+  for (const [exists, desc, p] of zipped) {
+    if (!exists) {
+      throw new Error(`The provided SSL ${desc} at '${p}' does not exist or is not accessible`);
+    }
+  }
+  const [cert, key] = await B.all(certKey.map((p) => fs.readFile(p, 'utf8')));
+  log.debug('Enabling TLS/SPDY on the server using the provided certificate');
+
+  return require('spdy').createServer({
+    cert,
+    key,
+    spdy: {
+      plain: false,
+      ssl: true,
+    }
+  }, app);
+}
 
 /**
  *
  * @param {ServerOpts} opts
  * @returns {Promise<AppiumServer>}
  */
-async function server(opts) {
+export async function server(opts) {
   const {
     routeConfiguringFunction,
     port,
     hostname,
-    cliArgs = {},
+    cliArgs = /** @type {import('@appium/types').ServerArgs} */ ({}),
     allowCors = true,
     basePath = DEFAULT_BASE_PATH,
     extraMethodMap = {},
     serverUpdaters = [],
     keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS,
+    requestTimeout,
   } = opts;
 
-  // create the actual http server
   const app = express();
-  const httpServer = http.createServer(app);
+  const httpServer = await createServer(app, cliArgs);
+
   return await new B(async (resolve, reject) => {
     // we put an async function as the promise constructor because we want some things to happen in
     // serial (application of plugin updates, for example). But we still need to use a promise here
@@ -62,6 +104,7 @@ async function server(opts) {
         httpServer,
         reject,
         keepAliveTimeout,
+        gracefulShutdownTimeout: cliArgs.shutdownTimeout,
       });
       configureServer({
         app,
@@ -69,6 +112,7 @@ async function server(opts) {
         allowCors,
         basePath,
         extraMethodMap,
+        webSocketsMapping: appiumServer.webSocketsMapping,
       });
       // allow extensions to update the app and http server objects
       for (const updater of serverUpdaters) {
@@ -80,7 +124,13 @@ async function server(opts) {
       // want to block extensions' ability to add routes if they want.
       app.all('*', catch404Handler);
 
-      await startServer({httpServer, hostname, port, keepAliveTimeout});
+      await startServer({
+        httpServer,
+        hostname,
+        port,
+        keepAliveTimeout,
+        requestTimeout,
+      });
 
       resolve(appiumServer);
     } catch (err) {
@@ -93,26 +143,29 @@ async function server(opts) {
  * Sets up some Express middleware and stuff
  * @param {ConfigureServerOpts} opts
  */
-function configureServer({
+export function configureServer({
   app,
   addRoutes,
   allowCors = true,
   basePath = DEFAULT_BASE_PATH,
   extraMethodMap = {},
+  webSocketsMapping = {},
 }) {
   basePath = normalizeBasePath(basePath);
 
   app.use(endLogFormatter);
+  app.use(handleLogContext);
 
   // set up static assets
   app.use(favicon(path.resolve(STATIC_DIR, 'favicon.ico')));
+  // eslint-disable-next-line import/no-named-as-default-member
   app.use(express.static(STATIC_DIR));
 
   // crash routes, for testing
   app.use(`${basePath}/produce_error`, produceError);
   app.use(`${basePath}/crash`, produceCrash);
 
-  // add middlewares
+  app.use(handleUpgrade(webSocketsMapping));
   if (allowCors) {
     app.use(allowCrossDomain);
   } else {
@@ -146,37 +199,54 @@ function configureServer({
  * @param {ConfigureHttpOpts} opts
  * @returns {AppiumServer}
  */
-function configureHttp({httpServer, reject, keepAliveTimeout}) {
-  const serverState = {
-    notifier: new EventEmitter(),
-    closed: false,
-  };
-  // TS does not love monkeypatching.
-  const appiumServer = /** @type {AppiumServer} */ (/** @type {unknown} */ (httpServer));
+function configureHttp({httpServer, reject, keepAliveTimeout, gracefulShutdownTimeout}) {
+  /**
+   * @type {AppiumServer}
+   */
+  const appiumServer = /** @type {any} */ (httpServer);
+  appiumServer.webSocketsMapping = {};
   appiumServer.addWebSocketHandler = addWebSocketHandler;
   appiumServer.removeWebSocketHandler = removeWebSocketHandler;
   appiumServer.removeAllWebSocketHandlers = removeAllWebSocketHandlers;
   appiumServer.getWebSocketHandlers = getWebSocketHandlers;
+  appiumServer.isSecure = function isSecure() {
+    // eslint-disable-next-line dot-notation
+    return Boolean(this['_spdyState']?.secure);
+  };
 
   // http.Server.close() only stops new connections, but we need to wait until
   // all connections are closed and the `close` event is emitted
-  const close = appiumServer.close.bind(appiumServer);
+  const originalClose = appiumServer.close.bind(appiumServer);
   appiumServer.close = async () =>
-    await new B((resolve, reject) => {
-      // https://github.com/nodejs/node-v0.x-archive/issues/9066#issuecomment-124210576
-      serverState.closed = true;
-      serverState.notifier.emit('shutdown');
-      log.info('Waiting until the server is closed');
-      httpServer.on('close', () => {
-        log.info('Received server close event');
-        resolve();
+    await new B((_resolve, _reject) => {
+      log.info('Closing Appium HTTP server');
+      const timer = new timing.Timer().start();
+      const onTimeout = setTimeout(() => {
+        if (gracefulShutdownTimeout > 0) {
+          log.info(
+            `Not all active connections have been closed within ${gracefulShutdownTimeout}ms. ` +
+            `This timeout might be customized by the --shutdown-timeout command line ` +
+            `argument. Closing the server anyway.`
+          );
+        }
+        process.exit(process.exitCode ?? 0);
+      }, gracefulShutdownTimeout);
+      httpServer.once('close', () => {
+        log.info(
+          `Appium HTTP server has been succesfully closed after ` +
+          `${timer.getDuration().asMilliSeconds.toFixed(0)}ms`
+        );
+        clearTimeout(onTimeout);
+        _resolve();
       });
-      close((err) => {
-        if (err) reject(err); // eslint-disable-line curly
+      originalClose((/** @type {Error|undefined} */ err) => {
+        if (err) {
+          _reject(err);
+        }
       });
     });
 
-  appiumServer.on(
+  appiumServer.once(
     'error',
     /** @param {NodeJS.ErrnoException} err */ (err) => {
       if (err.code === 'EADDRNOTAVAIL') {
@@ -194,31 +264,7 @@ function configureHttp({httpServer, reject, keepAliveTimeout}) {
     }
   );
 
-  appiumServer.on(
-    'connection',
-    /** @param {AppiumServerSocket} socket */ (socket) => {
-      socket.setTimeout(keepAliveTimeout);
-      socket.on('error', reject);
-
-      function destroy() {
-        socket.destroy();
-      }
-      socket._openReqCount = 0;
-      socket.once('close', () => serverState.notifier.removeListener('shutdown', destroy));
-      serverState.notifier.once('shutdown', destroy);
-    }
-  );
-
-  appiumServer.on('request', function (req, res) {
-    const socket = /** @type {AppiumServerSocket} */ (req.connection || req.socket);
-    socket._openReqCount++;
-    res.on('finish', function () {
-      socket._openReqCount--;
-      if (serverState.closed && socket._openReqCount === 0) {
-        socket.destroy();
-      }
-    });
-  });
+  appiumServer.on('connection', (socket) => socket.setTimeout(keepAliveTimeout));
 
   return appiumServer;
 }
@@ -228,13 +274,22 @@ function configureHttp({httpServer, reject, keepAliveTimeout}) {
  * @param {StartServerOpts} opts
  * @returns {Promise<void>}
  */
-async function startServer({httpServer, port, hostname, keepAliveTimeout}) {
+async function startServer({
+  httpServer,
+  port,
+  hostname,
+  keepAliveTimeout,
+  requestTimeout,
+}) {
   // If the hostname is omitted, the server will accept
   // connections on any IP address
   /** @type {(port: number, hostname?: string) => B<http.Server>} */
   const start = B.promisify(httpServer.listen, {context: httpServer});
   const startPromise = start(port, hostname);
   httpServer.keepAliveTimeout = keepAliveTimeout;
+  if (_.isInteger(requestTimeout)) {
+    httpServer.requestTimeout = Number(requestTimeout);
+  }
   // headers timeout must be greater than keepAliveTimeout
   httpServer.headersTimeout = keepAliveTimeout + 5 * 1000;
   await startPromise;
@@ -245,7 +300,7 @@ async function startServer({httpServer, port, hostname, keepAliveTimeout}) {
  * @param {string} basePath
  * @returns {string}
  */
-function normalizeBasePath(basePath) {
+export function normalizeBasePath(basePath) {
   if (!_.isString(basePath)) {
     throw new Error(`Invalid path prefix ${basePath}`);
   }
@@ -263,7 +318,6 @@ function normalizeBasePath(basePath) {
   return basePath;
 }
 
-export {server, configureServer, normalizeBasePath};
 
 /**
  * Options for {@linkcode startServer}.
@@ -272,11 +326,12 @@ export {server, configureServer, normalizeBasePath};
  * @property {number} port - Port to run on
  * @property {number} keepAliveTimeout - Keep-alive timeout in milliseconds
  * @property {string} [hostname] - Optional hostname
+ * @property {number} [requestTimeout] - The timeout value in milliseconds for
+ * receiving the entire request from the client
  */
 
 /**
  * @typedef {import('@appium/types').AppiumServer} AppiumServer
- * @typedef {import('@appium/types').AppiumServerSocket} AppiumServerSocket
  */
 
 /**
@@ -289,6 +344,9 @@ export {server, configureServer, normalizeBasePath};
  * @property {import('http').Server} httpServer - HTTP server instance
  * @property {(error?: any) => void} reject - Rejection function from `Promise` constructor
  * @property {number} keepAliveTimeout - Keep-alive timeout in milliseconds
+ * @property {number} gracefulShutdownTimeout - For how long the server should delay its
+ * shutdown before force-closing all open connections to it. Providing zero will force-close
+ * the server without waiting for any connections.
  */
 
 /**
@@ -303,6 +361,7 @@ export {server, configureServer, normalizeBasePath};
  * @property {MethodMap} [extraMethodMap]
  * @property {import('@appium/types').UpdateServerCallback[]} [serverUpdaters]
  * @property {number} [keepAliveTimeout]
+ * @property {number} [requestTimeout]
  */
 
 /**
@@ -328,4 +387,5 @@ export {server, configureServer, normalizeBasePath};
  * @property {boolean} [allowCors]
  * @property {string} [basePath]
  * @property {MethodMap} [extraMethodMap]
+ * @property {import('@appium/types').StringRecord} [webSocketsMapping={}]
  */
