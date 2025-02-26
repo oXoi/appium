@@ -8,6 +8,15 @@ import {
 import sinon from 'sinon';
 
 describe('helpers', function () {
+  let should;
+
+  before(async function () {
+    const chai = await import('chai');
+    const chaiAsPromised = await import('chai-as-promised');
+    chai.use(chaiAsPromised.default);
+    should = chai.should();
+  });
+
   describe('#isPackageOrBundle', function () {
     it('should accept packages and bundles', function () {
       isPackageOrBundle('io.appium.testapp').should.be.true;
@@ -143,5 +152,8 @@ describe('parseCapsArray', function () {
   });
   it('should return an array without change', function () {
     parseCapsArray(['a', 'b']).should.eql(['a', 'b']);
+  });
+  it('should fail if an invalid JSON array is provided', function () {
+    (() => parseCapsArray(`['*']`)).should.throw();
   });
 });

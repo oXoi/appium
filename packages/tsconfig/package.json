@@ -1,6 +1,6 @@
 {
   "name": "@appium/tsconfig",
-  "version": "0.2.4",
+  "version": "0.3.4",
   "description": "Shared TypeScript Config for Appium",
   "main": "tsconfig.json",
   "keywords": [
@@ -21,13 +21,18 @@
   "bugs": {
     "url": "https://github.com/appium/appium/issues"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/appium/appium.git",
+    "directory": "packages/tsconfig"
+  },
   "homepage": "https://appium.io",
   "engines": {
     "node": "^14.17.0 || ^16.13.0 || >=18.0.0",
     "npm": ">=8"
   },
   "dependencies": {
-    "@tsconfig/node14": "1.0.3"
+    "@tsconfig/node14": "14.1.2"
   },
   "scripts": {
     "test:smoke": "node tsconfig.json && node tsconfig.plugin.json"

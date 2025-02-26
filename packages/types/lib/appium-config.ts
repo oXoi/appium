@@ -6,7 +6,7 @@
  */
 
 /**
- * IP address to listen on
+ * IPv4/IPv6 address or a hostname to listen on
  */
 export type AddressConfig = string;
 /**
@@ -41,6 +41,10 @@ export type DenyInsecureConfig = string[];
  * Number of seconds the Appium server should apply as both the keep-alive timeout and the connection timeout for all requests. A value of 0 disables the timeout.
  */
 export type KeepAliveTimeoutConfig = number;
+/**
+ * Number of seconds the Appium server should apply for receiving the entire HTTP request from the client. A value of 0 disables the timeout. Set it to a non-zero value to protect against potential Denial-of-Service attacks in case the server is deployed without a reverse proxy in front. HTTP requests that are running longer than allowed by this timeout would be rejected with the status code 408.
+ */
+export type RequestTimeoutConfig = number;
 /**
  * Use local timezone for timestamps
  */
@@ -92,6 +96,10 @@ export type LogLevelConfig =
   | "debug:warn"
   | "debug:error";
 /**
+ * Log format (text|json|pretty_json)
+ */
+export type LogFormatConfig = "text" | "json" | "pretty_json";
+/**
  * Do not use color in console output
  */
 export type LogNoColorsConfig = boolean;
@@ -100,11 +108,19 @@ export type LogNoColorsConfig = boolean;
  */
 export type LogTimestampConfig = boolean;
 /**
+ * The maximum amount of plugins that could be imported in parallel on server startup
+ */
+export type PluginsImportChunkSizeConfig = number;
+/**
+ * The maximum amount of drivers that could be imported in parallel on server startup
+ */
+export type DriversImportChunkSizeConfig = number;
+/**
  * Add long stack traces to log entries. Recommended for debugging only.
  */
 export type LongStacktraceConfig = boolean;
 /**
- * Do not check that needed files are readable and/or writable
+ * Skip various permission checks on the server startup if set to true
  */
 export type NoPermsCheckConfig = boolean;
 /**
@@ -116,9 +132,21 @@ export type PortConfig = number;
  */
 export type RelaxedSecurityConfig = boolean;
 /**
+ * For how long the server should delay its shutdown before force-closing all open connections to it. Setting its value to zero should close the server without waiting for active connections.
+ */
+export type GracefulServerShutdownTimeoutInMilliseconds = number;
+/**
  * Enables session override (clobbering)
  */
 export type SessionOverrideConfig = boolean;
+/**
+ * Full path to the .cert file if TLS is used. Must be provided together with "ssl-key-path"
+ */
+export type CertFilePath = string;
+/**
+ * Full path to the .key file if TLS is used. Must be provided together with "ssl-cert-path"
+ */
+export type KeyFilePath = string;
 /**
  * Cause sessions to fail if desired caps are sent in that Appium does not recognize as valid for the selected device
  */
@@ -169,19 +197,26 @@ export interface ServerConfig {
   "deny-insecure"?: DenyInsecureConfig;
   driver?: DriverConfig;
   "keep-alive-timeout"?: KeepAliveTimeoutConfig;
+  "request-timeout"?: RequestTimeoutConfig;
   "local-timezone"?: LocalTimezoneConfig;
   log?: LogConfig;
   "log-filters"?: LogFiltersConfig;
   "log-level"?: LogLevelConfig;
+  "log-format"?: LogFormatConfig;
   "log-no-colors"?: LogNoColorsConfig;
   "log-timestamp"?: LogTimestampConfig;
+  "plugins-import-chunk-size"?: PluginsImportChunkSizeConfig;
+  "drivers-import-chunk-size"?: DriversImportChunkSizeConfig;
   "long-stacktrace"?: LongStacktraceConfig;
   "no-perms-check"?: NoPermsCheckConfig;
   nodeconfig?: NodeconfigConfig;
   plugin?: PluginConfig;
   port?: PortConfig;
   "relaxed-security"?: RelaxedSecurityConfig;
+  "shutdown-timeout"?: GracefulServerShutdownTimeoutInMilliseconds;
   "session-override"?: SessionOverrideConfig;
+  "ssl-cert-path"?: CertFilePath;
+  "ssl-key-path"?: KeyFilePath;
   "strict-caps"?: StrictCapsConfig;
   tmp?: TmpConfig;
   "trace-dir"?: TraceDirConfig;

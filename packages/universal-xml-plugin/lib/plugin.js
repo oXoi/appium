@@ -1,20 +1,10 @@
-/* eslint-disable no-case-declarations */
-
-import BasePlugin from 'appium/plugin';
+import {BasePlugin} from 'appium/plugin';
 import {errors} from 'appium/driver';
 import {transformSourceXml} from './source';
 import {transformQuery} from './xpath';
 import log from './logger';
 
 export default class UniversalXMLPlugin extends BasePlugin {
-  commands = [
-    'getPageSource',
-    'findElement',
-    'findElements',
-    'findElementFromElement',
-    'findElementsFromElement',
-  ];
-
   async getPageSource(next, driver, sessId, addIndexPath = false) {
     const source = next ? await next() : await driver.getPageSource();
     const metadata = {};
@@ -22,7 +12,7 @@ export default class UniversalXMLPlugin extends BasePlugin {
     if (platformName.toLowerCase() === 'android') {
       metadata.appPackage = driver.opts.appPackage;
     }
-    const {xml, unknowns} = transformSourceXml(source, platformName.toLowerCase(), {
+    const {xml, unknowns} = await transformSourceXml(source, platformName.toLowerCase(), {
       metadata,
       addIndexPath,
     });
@@ -31,7 +21,7 @@ export default class UniversalXMLPlugin extends BasePlugin {
         `The XML mapper found ${unknowns.nodes.length} node(s) / ` +
           `tag name(s) that it didn't know about. These should be ` +
           `reported to improve the quality of the plugin: ` +
-          unknowns.nodes.join(', ')
+          unknowns.nodes.join(', '),
       );
     }
     if (unknowns.attrs.length) {
@@ -39,7 +29,7 @@ export default class UniversalXMLPlugin extends BasePlugin {
         `The XML mapper found ${unknowns.attrs.length} attributes ` +
           `that it didn't know about. These should be reported to ` +
           `improve the quality of the plugin: ` +
-          unknowns.attrs.join(', ')
+          unknowns.attrs.join(', '),
       );
     }
     return xml;
@@ -55,7 +45,7 @@ export default class UniversalXMLPlugin extends BasePlugin {
 
   async _find(multiple, next, driver, strategy, selector) {
     const {platformName} = driver.caps;
-    if (strategy.toLowerCase() !== 'xpath') {
+    if (strategy.toLowerCase() !== 'xpath' || (await driver.getCurrentContext()) !== 'NATIVE_APP') {
       return await next();
     }
     const xml = await this.getPageSource(null, driver, null, true);
@@ -66,7 +56,7 @@ export default class UniversalXMLPlugin extends BasePlugin {
     if (newSelector === null) {
       log.warn(
         `Selector was not able to be translated to underlying XML. Either the requested ` +
-          `element does not exist or there was an error in translation`
+          `element does not exist or there was an error in translation`,
       );
       if (multiple) {
         return [];

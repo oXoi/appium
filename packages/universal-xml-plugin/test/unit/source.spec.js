@@ -1,4 +1,3 @@
-import chai from 'chai';
 import {
   XML_IOS,
   XML_IOS_TRANSFORMED,
@@ -8,33 +7,36 @@ import {
 } from '../fixtures';
 import {transformAttrs, transformChildNodes, transformSourceXml} from '../../lib/source';
 
-chai.should();
-
 describe('source functions', function () {
+  before(async function () {
+    const chai = await import('chai');
+    chai.should();
+  });
+
   describe('transformSourceXml', function () {
-    it('should transform an xml doc based on platform', function () {
+    it('should transform an xml doc based on platform', async function () {
       const {
         xml,
         unknowns: {nodes, attrs},
-      } = transformSourceXml(XML_IOS, 'ios');
+      } = await transformSourceXml(XML_IOS, 'ios');
       xml.should.eql(XML_IOS_TRANSFORMED);
       nodes.should.eql([]);
       attrs.should.eql([]);
     });
-    it('should transform an xml doc and include index path', function () {
+    it('should transform an xml doc and include index path', async function () {
       const {
         xml,
         unknowns: {nodes, attrs},
-      } = transformSourceXml(XML_IOS, 'ios', {addIndexPath: true});
+      } = await transformSourceXml(XML_IOS, 'ios', {addIndexPath: true});
       xml.should.eql(XML_IOS_TRANSFORMED_INDEX_PATH);
       nodes.should.eql([]);
       attrs.should.eql([]);
     });
-    it('should transform an xml doc and return any unknown nodes or attrs', function () {
+    it('should transform an xml doc and return any unknown nodes or attrs', async function () {
       const {
         xml,
         unknowns: {nodes, attrs},
-      } = transformSourceXml(XML_IOS_EDGE, 'ios');
+      } = await transformSourceXml(XML_IOS_EDGE, 'ios');
       xml.should.eql(XML_IOS_EDGE_TRANSFORMED);
       nodes.should.eql(['SomeRandoElement']);
       attrs.should.eql(['oddAttribute']);
